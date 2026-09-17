@@ -1,6 +1,6 @@
 # XDM New for macOS
 
-XDM New is an open-source, macOS-focused download manager modernization built from the historical Xtreme Download Manager source tree. It keeps the useful download-manager behavior while providing a native Mac interface and a clean local browser handoff.
+XDM New is an open-source, macOS-focused download manager modernization built from the historical Xtreme Download Manager source tree. It keeps the useful download-manager behavior while providing a native Mac interface and a clean local browser handoff. The current macOS test release is `0.0.1`.
 
 ## What is included
 

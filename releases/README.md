@@ -1,8 +1,8 @@
-# XDM New 0.1.0 macOS test build
+# XDM New 0.0.1 macOS test build
 
-`XDM-New-macOS-0.1.0.zip` contains `XDM New.app`, packaged from the source in this repository on macOS.
+`XDM-New-macOS-0.0.1.zip` contains `XDM New.app`, packaged from the source in this repository on macOS.
 
-- SHA-256: `2a2b9192e50b250978c6a26a410b39d69bb96b54ef413f369ef6c801fb9a589d`
+- SHA-256: `2e32944d91054e99457d32c47169988947d93c4f804243d09da8e47e03eba81a`
 - Code signing: ad-hoc signed for local testing only; it is **not notarized** by Apple.
 - Supported system: macOS with the system frameworks used by the included build.
 

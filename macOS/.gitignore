@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+DerivedData/
+dist/
+test-applications/
+firefox-test-profile/

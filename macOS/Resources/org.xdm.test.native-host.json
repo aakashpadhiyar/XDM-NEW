@@ -1,0 +1,7 @@
+{
+  "name": "org.xdm.test",
+  "description": "XDM Test native messaging host",
+  "path": "__XDM_NATIVE_HOST_PATH__",
+  "type": "stdio",
+  "allowed_extensions": ["xdm-test@local"]
+}

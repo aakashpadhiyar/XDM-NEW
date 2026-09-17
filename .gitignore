@@ -1,0 +1,8 @@
+.DS_Store
+macOS/.DS_Store
+macOS/.build/
+macOS/.swiftpm/
+macOS/DerivedData/
+macOS/dist/
+macOS/test-applications/
+macOS/firefox-test-profile/

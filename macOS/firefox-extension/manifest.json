@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "XDM Test Browser Monitor",
+  "version": "0.1.0",
+  "description": "Sends direct browser downloads to the local XDM Test app when monitoring is enabled.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "xdm-test@local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": ["downloads", "nativeMessaging", "storage"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_action": {
+    "default_title": "Enable XDM download monitoring"
+  }
+}

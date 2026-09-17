@@ -1,0 +1,1 @@
+XDM Test browser-handoff smoke test.

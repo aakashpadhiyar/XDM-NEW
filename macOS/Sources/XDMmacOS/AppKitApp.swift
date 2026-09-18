@@ -459,14 +459,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let browserHeading = NSTextField(labelWithString: "Browser integration")
         browserHeading.font = .systemFont(ofSize: 14, weight: .semibold)
         root.addArrangedSubview(browserHeading)
-        let browserStatus = NSTextField(wrappingLabelWithString: "\(browserStatusLabel.stringValue)\n\nUse XDM New’s bundled browser extensions. Firefox uses native messaging; Chrome uses the installed XDM New app directly, so neither needs the legacy port.")
+        let browserStatus = NSTextField(wrappingLabelWithString: "\(browserStatusLabel.stringValue)\n\nUse XDM New’s bundled browser extensions. Firefox and Chrome use native messaging, so neither needs the legacy port.")
         browserStatus.font = .systemFont(ofSize: 12)
         browserStatus.textColor = .secondaryLabelColor
         browserStatus.preferredMaxLayoutWidth = 480
         root.addArrangedSubview(browserStatus)
         let browserActions = NSStackView()
         browserActions.spacing = 8
-        browserActions.addArrangedSubview(button("Install / repair Firefox bridge", action: #selector(installFirefoxBridge)))
+        browserActions.addArrangedSubview(button("Install / repair browser bridge", action: #selector(installFirefoxBridge)))
         browserActions.addArrangedSubview(button("Firefox extension…", action: #selector(showFirefoxSetup)))
         browserActions.addArrangedSubview(button("Chrome extension…", action: #selector(revealChromeExtension)))
         root.addArrangedSubview(browserActions)
@@ -601,26 +601,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func installFirefoxBridge() {
         guard let hostURL = Bundle.main.resourceURL?.appendingPathComponent("XDMNativeHost"),
               FileManager.default.isExecutableFile(atPath: hostURL.path) else {
-            presentInformation("Firefox bridge is unavailable", message: "Reinstall XDM New so its native host is included.")
+            presentInformation("Browser bridge is unavailable", message: "Reinstall XDM New so its native host is included.")
             return
         }
-        let directory = FileManager.default.homeDirectoryForCurrentUser
+        let firefoxDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Mozilla/NativeMessagingHosts", isDirectory: true)
-        let manifestURL = directory.appendingPathComponent("org.xdm.test.json")
-        let manifest: [String: Any] = [
+        let firefoxManifest: [String: Any] = [
             "name": "org.xdm.test",
             "description": "XDM New native messaging host",
             "path": hostURL.path,
             "type": "stdio",
             "allowed_extensions": ["xdm-test@local"]
         ]
+        let chromeDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Google/Chrome/NativeMessagingHosts", isDirectory: true)
+        let chromeManifest: [String: Any] = [
+            "name": "org.xdm.test",
+            "description": "XDM New native messaging host",
+            "path": hostURL.path,
+            "type": "stdio",
+            "allowed_origins": ["chrome-extension://hognoibbenpcpakhkpajhhnflnfcpgah/"]
+        ]
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: manifestURL, options: .atomic)
-            presentInformation("Firefox bridge installed", message: "Firefox can now send downloads to XDM New. Load the bundled extension from Settings → Firefox extension.")
+            try FileManager.default.createDirectory(at: firefoxDirectory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: chromeDirectory, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: firefoxManifest, options: [.prettyPrinted, .sortedKeys])
+                .write(to: firefoxDirectory.appendingPathComponent("org.xdm.test.json"), options: .atomic)
+            try JSONSerialization.data(withJSONObject: chromeManifest, options: [.prettyPrinted, .sortedKeys])
+                .write(to: chromeDirectory.appendingPathComponent("org.xdm.test.json"), options: .atomic)
+            presentInformation("Browser bridge installed", message: "Firefox and Chrome can now send downloads to XDM New. Reload the bundled extension after installing it from Settings.")
         } catch {
-            presentInformation("Could not install Firefox bridge", message: error.localizedDescription)
+            presentInformation("Could not install browser bridge", message: error.localizedDescription)
         }
     }
 

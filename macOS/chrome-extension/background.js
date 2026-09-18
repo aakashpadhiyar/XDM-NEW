@@ -25,12 +25,13 @@ chrome.action.onClicked.addListener(async () => {
 chrome.downloads.onCreated.addListener(async (download) => {
   if (!monitoringEnabled || !download.url || !/^https?:/i.test(download.url)) return;
   try {
-    // A URL-scheme handoff avoids the contested legacy XDM port (9614).
-    // macOS routes this directly to the installed XDM New.app.
-    const handoff = new URL("xdmtest://download");
-    handoff.searchParams.set("url", download.finalUrl || download.url);
-    if (download.filename) handoff.searchParams.set("filename", download.filename);
-    await chrome.tabs.create({ url: handoff.toString(), active: false });
+    // Native messaging is independent of the legacy XDM monitor port (9614).
+    const response = await chrome.runtime.sendNativeMessage("org.xdm.test", {
+      type: "download",
+      url: download.finalUrl || download.url,
+      filename: download.filename || null
+    });
+    if (!response?.accepted) return;
     await chrome.downloads.cancel(download.id);
     await chrome.downloads.erase({ id: download.id });
   } catch (error) {

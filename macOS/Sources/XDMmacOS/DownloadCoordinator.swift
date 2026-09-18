@@ -553,11 +553,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
                     updated.bytesReceived += Int64(data.count)
                     let received = updated.bytesReceived
                     self.hlsTransfers[itemID] = updated
-                    self.update(itemID) {
-                        $0.bytesReceived = received
-                        $0.bytesExpected = 0
-                        $0.state = .downloading
-                    }
+                    self.updateProgress(itemID, received: received, expected: 0)
                     self.downloadNextHLSSegment(for: itemID)
                 } catch {
                     self.failHLS(itemID, message: "Could not write a streaming segment: \(error.localizedDescription)")
@@ -722,6 +718,22 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         }
     }
 
+    private func updateProgress(_ itemID: UUID, received: Int64, expected: Int64) {
+        update(itemID) {
+            let now = Date()
+            let elapsed = now.timeIntervalSince($0.speedSampleDate)
+            if elapsed >= 0.25 {
+                let delta = max(0, received - $0.speedSampleBytes)
+                $0.bytesPerSecond = Double(delta) / elapsed
+                $0.speedSampleBytes = received
+                $0.speedSampleDate = now
+            }
+            $0.bytesReceived = received
+            $0.bytesExpected = expected
+            $0.state = .downloading
+        }
+    }
+
     private static func contentLength(from response: HTTPURLResponse?) -> Int64? {
         guard let response else { return nil }
         if let value = response.value(forHTTPHeaderField: "Content-Length"), let length = Int64(value), length > 0 {
@@ -864,22 +876,14 @@ extension DownloadCoordinator: URLSessionDownloadDelegate {
         guard let kind = taskKinds[downloadTask.taskIdentifier] else { return }
         switch kind {
         case .single(let itemID):
-            update(itemID) {
-                $0.state = .downloading
-                $0.bytesReceived = totalBytesWritten
-                $0.bytesExpected = totalBytesExpectedToWrite
-            }
+            updateProgress(itemID, received: totalBytesWritten, expected: totalBytesExpectedToWrite)
         case .segment(let itemID, let index):
             guard var transfer = segmentedTransfers[itemID] else { return }
             transfer.bytesBySegment[index] = totalBytesWritten
             let received = transfer.completedBytes + transfer.bytesBySegment.values.reduce(0, +)
             let expectedSize = transfer.expectedSize
             segmentedTransfers[itemID] = transfer
-            update(itemID) {
-                $0.state = .downloading
-                $0.bytesReceived = received
-                $0.bytesExpected = expectedSize
-            }
+            updateProgress(itemID, received: received, expected: expectedSize)
         }
     }
 

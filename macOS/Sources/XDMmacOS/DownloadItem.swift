@@ -23,6 +23,9 @@ struct DownloadItem: Identifiable, Equatable, Sendable {
     var state: DownloadState = .queued
     var bytesReceived: Int64 = 0
     var bytesExpected: Int64 = 0
+    var bytesPerSecond: Double = 0
+    var speedSampleBytes: Int64 = 0
+    var speedSampleDate = Date()
     var connectionCount = 1
     var errorMessage: String?
     var finishedFileURL: URL?
@@ -47,9 +50,12 @@ struct DownloadItem: Identifiable, Equatable, Sendable {
         case .merging:
             return "Combining \(connectionCount) downloaded parts…"
         default:
-            guard bytesExpected > 0 else { return state.rawValue }
+            let speed = bytesPerSecond > 0 ? " · \(Self.byteCount(Int64(bytesPerSecond)))/s" : ""
+            guard bytesExpected > 0 else {
+                return bytesReceived > 0 ? "\(Self.byteCount(bytesReceived))\(speed)" : state.rawValue
+            }
             let connections = connectionCount > 1 ? " · \(connectionCount) connections" : ""
-            return "\(Self.byteCount(bytesReceived)) of \(Self.byteCount(bytesExpected))\(connections)"
+            return "\(Self.byteCount(bytesReceived)) of \(Self.byteCount(bytesExpected))\(speed)\(connections)"
         }
     }
 

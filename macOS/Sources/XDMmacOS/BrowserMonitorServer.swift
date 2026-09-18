@@ -15,6 +15,7 @@ struct BrowserMonitorPayload: Sendable {
     let contentDisposition: String?
     let referrer: String?
     let tabID: String?
+    let resolution: String?
     let acceptsByteRanges: Bool
 
     var reportedSize: Int64? {
@@ -296,6 +297,7 @@ final class BrowserMonitorServer: @unchecked Sendable {
         var requestHeaders = [String: String]()
         var responseHeaders = [String: String]()
         var cookies = [String]()
+        var resolution: String?
 
         for rawLine in text.components(separatedBy: .newlines) where !rawLine.isEmpty {
             guard let equals = rawLine.firstIndex(of: "=") else { continue }
@@ -307,6 +309,7 @@ final class BrowserMonitorServer: @unchecked Sendable {
             case "req": appendHeader(value, to: &requestHeaders)
             case "res": appendHeader(value, to: &responseHeaders)
             case "cookie": appendCookie(value, to: &cookies)
+            case "resolution": resolution = value
             default: break
             }
         }
@@ -333,6 +336,7 @@ final class BrowserMonitorServer: @unchecked Sendable {
             contentDisposition: contentDisposition,
             referrer: referrer,
             tabID: tabID,
+            resolution: resolution,
             acceptsByteRanges: acceptsRanges
         )
     }

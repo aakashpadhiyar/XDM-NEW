@@ -30,7 +30,7 @@ private final class PreviewDataSource: NSObject, QLPreviewPanelDataSource {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation {
     private enum StateFilter: Int { case all, active, completed }
 
     private let downloads = DownloadCoordinator()
@@ -1307,7 +1307,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func videoDescription(_ payload: BrowserMonitorPayload) -> String {
         let size = payload.reportedSize.map { DownloadItem.byteCount($0) } ?? "Size unavailable"
         let best = isBestVariant(payload) ? "Best · " : ""
-        return "\(best)\(size) · \(payload.mediaKind)"
+        let resolution = videoResolution(payload)
+        return "\(best)\(resolution) · \(size) · \(payload.mediaKind)"
+    }
+
+    private func videoResolution(_ payload: BrowserMonitorPayload) -> String {
+        let value = payload.resolution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? "Not supplied" : value
     }
 
     private func videoName(_ payload: BrowserMonitorPayload) -> String {
@@ -1390,7 +1396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             label.tag = 100
             label.font = .systemFont(ofSize: 11)
             label.textColor = .secondaryLabelColor
-            let button = NSButton(title: "Review", target: self, action: #selector(showDetectedVideos))
+            let button = NSButton(title: "Download video", target: self, action: #selector(showDetectedVideos))
             button.bezelStyle = .rounded
             button.controlSize = .small
             textStack.addArrangedSubview(title)
@@ -1441,6 +1447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.level = .floating
+        panel.delegate = self
 
         let root = NSStackView()
         root.orientation = .vertical
@@ -1455,7 +1462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         hint.textColor = .secondaryLabelColor
         root.addArrangedSubview(hint)
 
-        let columns = [("Name", 330.0), ("Size", 90.0), ("Type", 150.0)]
+        let columns = [("Name", 260.0), ("Resolution", 105.0), ("Size", 90.0), ("Type", 120.0)]
         for (identifier, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("video-\(identifier)"))
             column.title = identifier
@@ -1480,7 +1487,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         actions.spacing = 8
         actions.addArrangedSubview(button("Details", action: #selector(showSelectedVideoDetails)))
         actions.addArrangedSubview(button("Download now", action: #selector(downloadSelectedVideo)))
-        actions.addArrangedSubview(button("Close", action: #selector(closeDetectedVideos)))
+        let closeButton = button("×", action: #selector(closeDetectedVideos))
+        closeButton.bezelStyle = .inline
+        closeButton.font = .systemFont(ofSize: 18, weight: .medium)
+        closeButton.toolTip = "Minimize to Download video"
+        actions.addArrangedSubview(closeButton)
         root.addArrangedSubview(actions)
         panel.contentView = root
         videoListWindow = panel
@@ -1509,6 +1520,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func closeDetectedVideos() {
         videoListWindow?.orderOut(nil)
+        if !detectedVideos.isEmpty { showVideoToast() }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSWindow === videoListWindow else { return }
+        if !detectedVideos.isEmpty {
+            DispatchQueue.main.async { [weak self] in self?.showVideoToast() }
+        }
     }
 
     private func showMediaDetails(_ payload: BrowserMonitorPayload) {
@@ -1597,6 +1616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             let label = cell.subviews.compactMap { $0 as? NSTextField }.first
             switch identifier {
             case "video-Name": label?.stringValue = "\(isBestVariant(payload) ? "Best · " : "")\(videoName(payload))"
+            case "video-Resolution": label?.stringValue = videoResolution(payload)
             case "video-Size": label?.stringValue = payload.reportedSize.map(DownloadItem.byteCount) ?? "Unknown"
             default: label?.stringValue = payload.mediaKind
             }

@@ -27,10 +27,23 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         }
     }
 
+    /// A clear (non-encrypted) HLS media playlist. Segments are written in
+    /// playlist order, which produces a playable transport-stream file.
+    private struct HLSTransfer {
+        let workspaceURL: URL
+        let outputURL: URL
+        let segmentURLs: [URL]
+        var nextSegment = 0
+        var bytesReceived: Int64 = 0
+    }
+
     private var taskKinds: [Int: TaskKind] = [:]
     private var singleTasks: [UUID: URLSessionDownloadTask] = [:]
     private var segmentTasks: [UUID: [Int: URLSessionDownloadTask]] = [:]
     private var segmentedTransfers: [UUID: SegmentedTransfer] = [:]
+    private var hlsTransfers: [UUID: HLSTransfer] = [:]
+    private var hlsTasks: [UUID: URLSessionDataTask] = [:]
+    private var pausedHLSIDs = Set<UUID>()
     private var resumeDataByID: [UUID: Data] = [:]
     private var destinationFolders: [UUID: URL] = [:]
     private var preferredFileNames: [UUID: String] = [:]
@@ -89,6 +102,13 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             update(item.id) { $0.state = .paused }
             return
         }
+        if let task = hlsTasks.removeValue(forKey: item.id) {
+            pausedHLSIDs.insert(item.id)
+            task.cancel()
+            update(item.id) { $0.state = .paused }
+            releaseSlot(for: item.id)
+            return
+        }
 
         guard segmentTasks[item.id] != nil else { return }
         pausedSegmentedIDs.insert(item.id)
@@ -121,6 +141,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             return
         }
         pausedSegmentedIDs.remove(item.id)
+        pausedHLSIDs.remove(item.id)
         update(item.id) {
             $0.state = .queued
             $0.errorMessage = nil
@@ -135,6 +156,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             task.cancel()
         }
         cancelSegmentedTasks(for: item.id, removeWorkspace: true)
+        cancelHLSTransfer(for: item.id, removeWorkspace: true)
         resumeDataByID[item.id] = nil
         destinationFolders[item.id] = nil
         preferredFileNames[item.id] = nil
@@ -156,6 +178,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
 
     func retry(_ item: DownloadItem) {
         cancelSegmentedTasks(for: item.id, removeWorkspace: true)
+        cancelHLSTransfer(for: item.id, removeWorkspace: true)
         resumeDataByID[item.id] = nil
         pausedSegmentedIDs.remove(item.id)
         fallingBackIDs.remove(item.id)
@@ -199,7 +222,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
 
     func cleanUnusedCache(in destinationFolder: URL) -> Int {
         let cacheRoot = destinationFolder.appendingPathComponent(".XDM", isDirectory: true)
-        let activeWorkspaces = Set(segmentedTransfers.values.map(\.workspaceURL))
+        let activeWorkspaces = Set(segmentedTransfers.values.map(\.workspaceURL) + hlsTransfers.values.map(\.workspaceURL))
         guard let workspaces = try? FileManager.default.contentsOfDirectory(
             at: cacheRoot,
             includingPropertiesForKeys: nil,
@@ -242,6 +265,8 @@ final class DownloadCoordinator: NSObject, ObservableObject {
                 task.resume()
             } else if segmentedTransfers[itemID] != nil {
                 resumeSegmentedTransfer(for: itemID)
+            } else if hlsTransfers[itemID] != nil {
+                resumeHLSTransfer(for: itemID)
             } else {
                 beginTransfer(for: itemID, from: item.sourceURL)
             }
@@ -300,6 +325,11 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             $0.errorMessage = nil
         }
 
+        if Self.isHLSURL(url) {
+            startHLSDownload(for: itemID, manifestURL: url)
+            return
+        }
+
         var request = request(for: itemID, url: url)
         request.httpMethod = "HEAD"
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
@@ -318,7 +348,9 @@ final class DownloadCoordinator: NSObject, ObservableObject {
                 )
                 self.preferredFileNames[itemID] = resolvedName
                 self.update(itemID) { $0.fileName = resolvedName }
-                if acceptsRanges, let contentLength, contentLength >= Self.minimumPartSize * 2 {
+                if Self.isHLSContentType(http?.mimeType) {
+                    self.startHLSDownload(for: itemID, manifestURL: url)
+                } else if acceptsRanges, let contentLength, contentLength >= Self.minimumPartSize * 2 {
                     self.startSegmentedTransfer(for: itemID, from: url, length: contentLength)
                 } else {
                     self.startSingleTransfer(for: itemID, from: url)
@@ -422,6 +454,160 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         var request = URLRequest(url: url)
         request.allHTTPHeaderFields = requestHeadersByID[itemID] ?? [:]
         return request
+    }
+
+    private func startHLSDownload(for itemID: UUID, manifestURL: URL) {
+        guard destinationFolders[itemID] != nil else { return }
+        update(itemID) {
+            $0.state = .downloading
+            $0.connectionCount = 1
+            $0.bytesExpected = 0
+            $0.errorMessage = nil
+        }
+        loadHLSPlaylist(for: itemID, at: manifestURL, remainingRedirects: 3)
+    }
+
+    private func loadHLSPlaylist(for itemID: UUID, at playlistURL: URL, remainingRedirects: Int) {
+        let task = URLSession.shared.dataTask(with: request(for: itemID, url: playlistURL)) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self, self.destinationFolders[itemID] != nil else { return }
+                guard error == nil, let data, let playlist = String(data: data, encoding: .utf8) else {
+                    self.failHLS(itemID, message: error?.localizedDescription ?? "The streaming playlist could not be read.")
+                    return
+                }
+                let resolvedURL = response?.url ?? playlistURL
+                switch Self.parseHLSPlaylist(playlist, baseURL: resolvedURL) {
+                case .master(let variantURL):
+                    guard remainingRedirects > 0 else {
+                        self.failHLS(itemID, message: "The HLS playlist redirected through too many variant playlists.")
+                        return
+                    }
+                    self.loadHLSPlaylist(for: itemID, at: variantURL, remainingRedirects: remainingRedirects - 1)
+                case .media(let segments):
+                    self.beginHLSSegments(for: itemID, manifestURL: resolvedURL, segments: segments)
+                case .failure(let message):
+                    self.failHLS(itemID, message: message)
+                }
+            }
+        }
+        task.resume()
+    }
+
+    private func beginHLSSegments(for itemID: UUID, manifestURL: URL, segments: [URL]) {
+        guard let destinationFolder = destinationFolders[itemID], !segments.isEmpty else {
+            failHLS(itemID, message: "The HLS playlist has no downloadable media segments.")
+            return
+        }
+        let requestedName = preferredFileNames[itemID] ?? manifestURL.lastPathComponent
+        let baseName = URL(fileURLWithPath: requestedName).deletingPathExtension().lastPathComponent
+        let fileName = "\(baseName.isEmpty ? "Download" : baseName).ts"
+        let workspace = Self.workspaceURL(in: destinationFolder, fileName: fileName, expectedSize: Int64(segments.count), itemID: itemID)
+        let outputURL = workspace.appendingPathComponent("stream.ts")
+        do {
+            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+            hlsTransfers[itemID] = HLSTransfer(workspaceURL: workspace, outputURL: outputURL, segmentURLs: segments)
+            preferredFileNames[itemID] = fileName
+            update(itemID) {
+                $0.fileName = fileName
+                $0.temporaryWorkspaceURL = workspace
+                $0.state = .downloading
+            }
+            downloadNextHLSSegment(for: itemID)
+        } catch {
+            failHLS(itemID, message: "Could not create the streaming workspace: \(error.localizedDescription)")
+        }
+    }
+
+    private func resumeHLSTransfer(for itemID: UUID) {
+        pausedHLSIDs.remove(itemID)
+        guard hlsTransfers[itemID] != nil else { return }
+        update(itemID) { $0.state = .downloading; $0.errorMessage = nil }
+        downloadNextHLSSegment(for: itemID)
+    }
+
+    private func downloadNextHLSSegment(for itemID: UUID) {
+        guard !pausedHLSIDs.contains(itemID), let transfer = hlsTransfers[itemID] else { return }
+        guard transfer.nextSegment < transfer.segmentURLs.count else {
+            finishHLS(for: itemID, transfer: transfer)
+            return
+        }
+        let task = URLSession.shared.dataTask(with: request(for: itemID, url: transfer.segmentURLs[transfer.nextSegment])) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self, let current = self.hlsTransfers[itemID] else { return }
+                self.hlsTasks[itemID] = nil
+                guard !self.pausedHLSIDs.contains(itemID) else { return }
+                guard error == nil, let data,
+                      let http = response as? HTTPURLResponse,
+                      (200...299).contains(http.statusCode) else {
+                    self.failHLS(itemID, message: error?.localizedDescription ?? "A streaming segment could not be downloaded.")
+                    return
+                }
+                do {
+                    let output = try FileHandle(forWritingTo: current.outputURL)
+                    try output.seekToEnd()
+                    try output.write(contentsOf: data)
+                    try output.close()
+                    var updated = current
+                    updated.nextSegment += 1
+                    updated.bytesReceived += Int64(data.count)
+                    let received = updated.bytesReceived
+                    self.hlsTransfers[itemID] = updated
+                    self.update(itemID) {
+                        $0.bytesReceived = received
+                        $0.bytesExpected = 0
+                        $0.state = .downloading
+                    }
+                    self.downloadNextHLSSegment(for: itemID)
+                } catch {
+                    self.failHLS(itemID, message: "Could not write a streaming segment: \(error.localizedDescription)")
+                }
+            }
+        }
+        hlsTasks[itemID] = task
+        task.resume()
+    }
+
+    private func finishHLS(for itemID: UUID, transfer: HLSTransfer) {
+        guard let destinationFolder = destinationFolders[itemID] else { return }
+        let destination = Self.availableDestination(named: preferredFileNames[itemID] ?? "Download.ts", in: destinationFolder)
+        update(itemID) { $0.state = .merging }
+        do {
+            try FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: transfer.outputURL, to: destination)
+            hlsTransfers[itemID] = nil
+            Self.removeWorkspace(transfer.workspaceURL)
+            preferredFileNames[itemID] = nil
+            update(itemID) {
+                $0.fileName = destination.lastPathComponent
+                $0.finishedFileURL = destination
+                $0.bytesReceived = transfer.bytesReceived
+                $0.state = .completed
+                $0.temporaryWorkspaceURL = nil
+            }
+            releaseSlot(for: itemID)
+        } catch {
+            failHLS(itemID, message: "Could not finalize the streaming video: \(error.localizedDescription)")
+        }
+    }
+
+    private func failHLS(_ itemID: UUID, message: String) {
+        hlsTasks.removeValue(forKey: itemID)?.cancel()
+        if let transfer = hlsTransfers.removeValue(forKey: itemID) { Self.removeWorkspace(transfer.workspaceURL) }
+        update(itemID) {
+            $0.state = .failed
+            $0.errorMessage = message
+            $0.temporaryWorkspaceURL = nil
+        }
+        releaseSlot(for: itemID)
+    }
+
+    private func cancelHLSTransfer(for itemID: UUID, removeWorkspace: Bool) {
+        hlsTasks.removeValue(forKey: itemID)?.cancel()
+        pausedHLSIDs.remove(itemID)
+        if let transfer = hlsTransfers.removeValue(forKey: itemID), removeWorkspace {
+            Self.removeWorkspace(transfer.workspaceURL)
+        }
     }
 
     private func cancelSegmentedTasks(for itemID: UUID, removeWorkspace: Bool, preserveTransfer: Bool = false) {
@@ -542,6 +728,71 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             return length
         }
         return response.expectedContentLength > 0 ? response.expectedContentLength : nil
+    }
+
+    private enum HLSPlaylistResult {
+        case master(URL)
+        case media([URL])
+        case failure(String)
+    }
+
+    private static func isHLSURL(_ url: URL) -> Bool {
+        url.pathExtension.caseInsensitiveCompare("m3u8") == .orderedSame
+    }
+
+    private static func isHLSContentType(_ contentType: String?) -> Bool {
+        let value = contentType?.lowercased() ?? ""
+        return value.contains("mpegurl") || value.contains("vnd.apple.mpegurl")
+    }
+
+    private static func parseHLSPlaylist(_ text: String, baseURL: URL) -> HLSPlaylistResult {
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard lines.contains(where: { $0 == "#EXTM3U" }) else {
+            return .failure("The response is not an HLS M3U8 playlist.")
+        }
+        var encrypted = false
+        var variants = [(bandwidth: Int, url: URL)]()
+        var segments = [URL]()
+        var nextVariantBandwidth: Int?
+        for line in lines where !line.isEmpty {
+            if line.hasPrefix("#EXT-X-KEY:") {
+                let upper = line.uppercased()
+                if !upper.contains("METHOD=NONE") { encrypted = true }
+                continue
+            }
+            if line.hasPrefix("#EXT-X-STREAM-INF:") {
+                let bandwidth = line.split(separator: ",").first { $0.uppercased().hasPrefix("BANDWIDTH=") }
+                    .flatMap { Int($0.split(separator: "=").last ?? "0") } ?? 0
+                nextVariantBandwidth = bandwidth
+                continue
+            }
+            if line.hasPrefix("#EXT-X-MAP:") {
+                if let uri = hlsAttribute("URI", in: line), let url = URL(string: uri, relativeTo: baseURL)?.absoluteURL {
+                    segments.append(url)
+                }
+                continue
+            }
+            guard !line.hasPrefix("#"), let url = URL(string: line, relativeTo: baseURL)?.absoluteURL else { continue }
+            if let bandwidth = nextVariantBandwidth {
+                variants.append((bandwidth, url))
+                nextVariantBandwidth = nil
+            } else {
+                segments.append(url)
+            }
+        }
+        if let selected = variants.max(by: { $0.bandwidth < $1.bandwidth }) { return .master(selected.url) }
+        if encrypted { return .failure("This HLS playlist is encrypted or DRM-protected, so XDM New will not download it as clear media.") }
+        guard !segments.isEmpty else { return .failure("The HLS playlist did not contain media segments.") }
+        return .media(segments)
+    }
+
+    private static func hlsAttribute(_ name: String, in line: String) -> String? {
+        let pattern = "(?:^|,)\(name)=\\\"?([^,\\\"]+)"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = expression.firstMatch(in: line, options: [], range: range),
+              let valueRange = Range(match.range(at: 1), in: line) else { return nil }
+        return String(line[valueRange])
     }
 
     private static func segmentCount(for length: Int64) -> Int {

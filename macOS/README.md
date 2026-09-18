@@ -11,7 +11,7 @@ Current first slice:
 - completed or partial video preview; completed-file actions that use the macOS default application or a user-selected installed app, plus Finder reveal;
 - saved history, properties, context menus, queue limits (1–10 simultaneous downloads), and a `.XDM` partial-download cache that is cleaned after a successful merge;
 - system, light, and dark appearance choices, plus application, connection, queue, and browser-integration settings;
-- a Firefox development extension and native-messaging host for explicit browser-download handoff.
+- Chrome Web Store and Firefox Add-ons upload packages, plus a native-messaging host for explicit browser-download handoff.
 - compatibility with the installed legacy **XDM Browser Monitor** Firefox extension: direct downloads are handed to XDM Test, while detected media opens a native **Download now / Later** prompt.
 
 ## Build a test app
@@ -22,7 +22,7 @@ cd macOS
 open "dist/XDM New.app"
 ```
 
-The command compiles the release build, makes a clean ad-hoc-signed staging app, verifies its signature, creates and validates `dist/XDM-New-macOS-<version>-test.zip`, and prints its SHA-256 checksum. Only after those checks succeed, it replaces the known generated test apps, test ZIPs, and `.DS_Store` in `macOS/dist`; source files, the GitHub release, and your Downloads folder are never touched. Pass `--keep-old` to preserve earlier local test artifacts.
+The command compiles the release build, makes a clean ad-hoc-signed staging app, verifies its signature, creates and validates `dist/XDM-New-macOS-<version>-test.zip`, and also makes portal-upload browser packages in `dist/extensions`. Only after those checks succeed, it replaces the known generated test apps, test ZIPs, and `.DS_Store` in `macOS/dist`; source files, the GitHub release, and your Downloads folder are never touched. Pass `--keep-old` to preserve earlier local test artifacts.
 
 To copy the test app to an empty folder without administrator access:
 
@@ -31,6 +31,17 @@ open scripts/install-test-app.command --args "$PWD/test-applications"
 ```
 
 The installer deliberately refuses to overwrite an existing test app. It does not use administrator privileges, change Gatekeeper settings, or alter the original XDM install.
+
+## Browser extension packages
+
+The app build also creates these upload-ready archives. They contain `manifest.json` at the archive root and have a `SHA256SUMS.txt` checksum file:
+
+- `dist/extensions/XDM-New-Chrome-extension-<version>.zip` — upload this ZIP to Chrome Web Store.
+- `dist/extensions/XDM-New-Firefox-extension-<version>.xpi` — upload this XPI to Firefox Add-ons (AMO) for signing.
+
+For extension-only packaging, run `./scripts/package-browser-extensions.command`.
+
+Chrome users on macOS must install from your Chrome Web Store listing. Firefox users can install from its AMO listing; a self-hosted Firefox download requires the AMO-signed XPI and a server that supplies the required `application/x-xpinstall` MIME type.
 
 ## Firefox handoff test
 
@@ -41,7 +52,7 @@ cd macOS
 ./scripts/install-firefox-test-integration.command
 ```
 
-In Firefox, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `firefox-extension/manifest.json`. The extension's toolbar button is off by default. When turned on, it passes direct HTTP/HTTPS downloads to XDM Test and cancels Firefox's duplicate download after XDM confirms the handoff.
+In Firefox, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `firefox-extension/manifest.json`. The extension's toolbar button is off by default. When turned on, it passes direct HTTP/HTTPS downloads to XDM New and cancels Firefox's duplicate download after XDM confirms the handoff.
 
 This integration is intentionally a local, development-only setup. It is not signed for public Firefox distribution.
 

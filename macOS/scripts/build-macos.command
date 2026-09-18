@@ -103,6 +103,10 @@ print "Creating and validating ${ARCHIVE_NAME}…"
 ditto -c -k --keepParent "${STAGE_APP}" "${STAGE_ARCHIVE}"
 unzip -t "${STAGE_ARCHIVE}" >/dev/null
 
+# Build the portal-upload extension archives before removing any prior app
+# output. This keeps the complete release workflow to one command.
+"${SCRIPT_DIR}/package-browser-extensions.command"
+
 # Do not discard the old generated output until the replacement is verified.
 mkdir -p "$DIST_DIR"
 if [[ "$KEEP_OLD" != true ]]; then

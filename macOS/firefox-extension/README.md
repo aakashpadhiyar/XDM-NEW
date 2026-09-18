@@ -1,7 +1,7 @@
-# Firefox test extension
+# XDM New Firefox extension
 
-This development-only extension hands direct HTTP/HTTPS downloads to `XDM Test` through Firefox native messaging. Its toolbar button is off by default; turn it on only when you want XDM to take over downloads.
+This extension hands direct HTTP/HTTPS downloads to the local XDM New app through Firefox native messaging. Its toolbar button is off by default; turn it on only when you want XDM New to take over downloads.
 
-After running the integration setup script, open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select this directory's `manifest.json`.
+For development, use Firefox's `about:debugging#/runtime/this-firefox` page and choose **Load Temporary Add-on**. For public distribution, upload the generated `.xpi` package to Firefox Add-ons (AMO) for signing, then link users to the AMO listing.
 
-Firefox temporary add-ons are removed when Firefox restarts. Do not publish this test extension or use it to capture protected content.
+Firefox temporary add-ons are removed when Firefox restarts. The extension does not capture protected content.

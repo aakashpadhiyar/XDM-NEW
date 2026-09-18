@@ -1,7 +1,7 @@
 {
   "name": "org.xdm.test",
-  "description": "XDM Test native messaging host",
+  "description": "XDM New native messaging host",
   "path": "__XDM_NATIVE_HOST_PATH__",
   "type": "stdio",
-  "allowed_extensions": ["xdm-test@local"]
+  "allowed_extensions": ["xdm-new@aakashpadhiyar.github.io", "xdm-test@local"]
 }

@@ -913,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
             "description": "XDM New native messaging host",
             "path": hostURL.path,
             "type": "stdio",
-            "allowed_extensions": ["xdm-test@local"]
+            "allowed_extensions": ["xdm-new@aakashpadhiyar.github.io", "xdm-test@local"]
         ]
         let chromeDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Google/Chrome/NativeMessagingHosts", isDirectory: true)

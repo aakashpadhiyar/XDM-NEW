@@ -4,4 +4,4 @@ This extension hands direct HTTP/HTTPS downloads to the local XDM New app throug
 
 For development, use Firefox's `about:debugging#/runtime/this-firefox` page and choose **Load Temporary Add-on**. For public distribution, upload the generated `.xpi` package to Firefox Add-ons (AMO) for signing, then link users to the AMO listing.
 
-Firefox temporary add-ons are removed when Firefox restarts. The extension does not capture protected content.
+Firefox temporary add-ons are removed when Firefox restarts. The extension does not collect or transmit user data; it declares that fact through Firefox's required built-in data-collection consent metadata. It does not capture protected content.

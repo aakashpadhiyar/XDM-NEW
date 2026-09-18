@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "XDM New Browser Monitor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Sends direct browser downloads to the local XDM New app when monitoring is enabled.",
   "permissions": ["downloads", "storage", "nativeMessaging"],
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs9WHR8yKmRg06scKHkiAFh9dBelZTy3pksIUUc1gsTn6n9w9BVqd3ywTw8f45h1SKBLn7bW/Qsi1vmBgSry4stTBPY1HivMGtsDlp19ZJuoEIPW8FTAkadSIwarbgQHoe6msWCuGPZicyrHI5WPMcKs7u91di49yWEMqI05bk4xJ7aiJRxVdXRVoZ60n46szjp14HwqQaAXQBO4LCY9OILhhtgKf/WJScWcLQ8G5JvTmn7i3UWVHGm6+2hXV5VCheESr1KKKO4ErrER2ItrkE8peTmvQ2TV/+4FSyW/hrBtO8ySbKSTYQKR1Ozhq7uxJMhmV1DrgGKRj5V7VgUfFOwIDAQAB",

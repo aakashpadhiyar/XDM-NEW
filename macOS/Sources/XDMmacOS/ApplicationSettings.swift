@@ -10,6 +10,15 @@ enum ApplicationSettings {
     static let maximumSimultaneousDownloads = 10
     private static let appearanceKey = "appearanceMode"
     private static let automaticRetryKey = "automaticRetryEnabled"
+    private static let browserMonitoringKey = "browserMonitoringEnabled"
+    private static let videoCaptureKey = "browserVideoCaptureEnabled"
+    private static let videoMinimumMegabytesKey = "browserVideoMinimumMegabytes"
+    private static let excludedHostsKey = "browserExcludedHosts"
+    private static let fileExtensionsKey = "browserFileExtensions"
+    private static let videoExtensionsKey = "browserVideoExtensions"
+    private static let clipboardMonitoringKey = "clipboardMonitoringEnabled"
+    private static let startAutomaticallyKey = "browserStartAutomatically"
+    private static let serverTimestampKey = "browserServerTimestampEnabled"
     static let automaticRetryLimit = 3
 
     enum AppearanceMode: String, CaseIterable {
@@ -55,5 +64,64 @@ enum ApplicationSettings {
             return UserDefaults.standard.bool(forKey: automaticRetryKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: automaticRetryKey) }
+    }
+
+    static var browserMonitoringEnabled: Bool {
+        get { bool(for: browserMonitoringKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: browserMonitoringKey) }
+    }
+
+    static var videoCaptureEnabled: Bool {
+        get { bool(for: videoCaptureKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: videoCaptureKey) }
+    }
+
+    static var videoMinimumMegabytes: Int {
+        get {
+            let value = UserDefaults.standard.integer(forKey: videoMinimumMegabytesKey)
+            return min(max(value == 0 ? 1 : value, 1), 1_024)
+        }
+        set { UserDefaults.standard.set(min(max(newValue, 1), 1_024), forKey: videoMinimumMegabytesKey) }
+    }
+
+    static var excludedHosts: String {
+        get { UserDefaults.standard.string(forKey: excludedHostsKey) ?? "update.microsoft.com,windowsupdate.com" }
+        set { UserDefaults.standard.set(newValue, forKey: excludedHostsKey) }
+    }
+
+    static var fileExtensions: String {
+        get { UserDefaults.standard.string(forKey: fileExtensionsKey) ?? "3GP,7Z,AVI,BZ2,DEB,DOC,DOCX,DMG,EXE,GZ,ISO,MSI,PDF,PPT,PPTX,RAR,RPM,XLS,XLSX,TAR,JAR,ZIP,XZ" }
+        set { UserDefaults.standard.set(newValue, forKey: fileExtensionsKey) }
+    }
+
+    static var videoExtensions: String {
+        get { UserDefaults.standard.string(forKey: videoExtensionsKey) ?? "MP4,M3U8,F4M,WEBM,OGG,MP3,AAC,FLV,MKV,DIVX,MOV,MPG,MPEG,OPUS" }
+        set { UserDefaults.standard.set(newValue, forKey: videoExtensionsKey) }
+    }
+
+    static var clipboardMonitoringEnabled: Bool {
+        get { bool(for: clipboardMonitoringKey, default: false) }
+        set { UserDefaults.standard.set(newValue, forKey: clipboardMonitoringKey) }
+    }
+
+    static var startDownloadsAutomatically: Bool {
+        get { bool(for: startAutomaticallyKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: startAutomaticallyKey) }
+    }
+
+    static var serverTimestampEnabled: Bool {
+        get { bool(for: serverTimestampKey, default: false) }
+        set { UserDefaults.standard.set(newValue, forKey: serverTimestampKey) }
+    }
+
+    static var videoMinimumBytes: Int64 { Int64(videoMinimumMegabytes) * 1_048_576 }
+
+    static func commaSeparatedValues(_ value: String) -> [String] {
+        value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    private static func bool(for key: String, default defaultValue: Bool) -> Bool {
+        if UserDefaults.standard.object(forKey: key) == nil { return defaultValue }
+        return UserDefaults.standard.bool(forKey: key)
     }
 }

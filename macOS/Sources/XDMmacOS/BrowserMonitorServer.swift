@@ -147,11 +147,11 @@ final class BrowserMonitorServer: @unchecked Sendable {
                 ]
             }
             let response: [String: Any] = [
-                "enabled": true,
-                "blockedHosts": [],
+                "enabled": ApplicationSettings.browserMonitoringEnabled,
+                "blockedHosts": ApplicationSettings.commaSeparatedValues(ApplicationSettings.excludedHosts),
                 "videoUrls": [],
-                "fileExts": ["ZIP", "RAR", "7Z", "DMG", "EXE", "PKG", "ISO", "PDF"],
-                "vidExts": ["MP4", "M4V", "MOV", "MKV", "WEBM", "MP3", "M4A"],
+                "fileExts": ApplicationSettings.commaSeparatedValues(ApplicationSettings.fileExtensions),
+                "vidExts": ApplicationSettings.commaSeparatedValues(ApplicationSettings.videoExtensions),
                 "vidList": videoList,
                 "mimeList": ["video/", "audio/", "mpegurl", "f4m", "m3u8"]
             ]
@@ -159,6 +159,10 @@ final class BrowserMonitorServer: @unchecked Sendable {
             respond(status: 200, body: body, contentType: "application/json", on: connection)
 
         case ("POST", "/download"):
+            guard ApplicationSettings.browserMonitoringEnabled else {
+                respond(status: 204, body: Data(), on: connection)
+                return
+            }
             guard let payload = Self.payload(from: request.body) else {
                 respond(status: 400, body: "Missing download URL", on: connection)
                 return
@@ -169,6 +173,10 @@ final class BrowserMonitorServer: @unchecked Sendable {
             respond(status: 200, body: Data(), on: connection)
 
         case ("POST", "/video"):
+            guard ApplicationSettings.browserMonitoringEnabled, ApplicationSettings.videoCaptureEnabled else {
+                respond(status: 204, body: Data(), on: connection)
+                return
+            }
             guard var payload = Self.payload(from: request.body) else {
                 respond(status: 400, body: "Missing video URL", on: connection)
                 return
@@ -249,7 +257,16 @@ final class BrowserMonitorServer: @unchecked Sendable {
         let manifest = payload.mediaKind == "Stream manifest"
         guard payload.mediaKind != "Unknown media" else { return false }
         guard !manifest else { return true }
-        return payload.reportedSize == nil || payload.reportedSize! >= 1_048_576
+        guard !isExcludedHost(payload.url.host) else { return false }
+        return payload.reportedSize == nil || payload.reportedSize! >= ApplicationSettings.videoMinimumBytes
+    }
+
+    private static func isExcludedHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty else { return false }
+        return ApplicationSettings.commaSeparatedValues(ApplicationSettings.excludedHosts).contains { excluded in
+            let normalized = excluded.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return host == normalized || host.hasSuffix(".\(normalized)")
+        }
     }
 
     private static func parseRequest(_ data: Data) -> HTTPRequest? {

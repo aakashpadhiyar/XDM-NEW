@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let stateControl = NSSegmentedControl(labels: ["All", "Active", "Completed"], trackingMode: .selectOne, target: nil, action: nil)
     private let browserStatusLabel = NSTextField(labelWithString: "Browser integration: starting…")
     private let detectedVideosButton = NSButton(title: "Download video", target: nil, action: nil)
+    private let browserMonitoringToggle = NSButton(checkboxWithTitle: "Browser monitoring", target: nil, action: nil)
     private var detectedVideosMenuItem: NSMenuItem?
     private var stateFilter = StateFilter.all
     private var itemsObservation: AnyCancellable?
@@ -64,6 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var videoListWindow: NSPanel?
     private let detectedVideosTable = NSTableView()
     private var visibleVideoOptions = [BrowserMonitorPayload]()
+    private var browserMonitoringWindow: NSPanel?
+    private var browserFileExtensionsField: NSTextField?
+    private var browserVideoExtensionsField: NSTextField?
+    private var browserExcludedHostsField: NSTextField?
+    private var browserMinimumSizeControl: NSPopUpButton?
+    private var browserVideoCaptureCheck: NSButton?
+    private var browserClipboardCheck: NSButton?
+    private var browserAutomaticStartCheck: NSButton?
+    private var browserTimestampCheck: NSButton?
+    private var clipboardTimer: Timer?
+    private var lastClipboardChangeCount = NSPasteboard.general.changeCount
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         applyAppearanceSetting()
@@ -83,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
         refreshFolderLabel()
         startOriginalFirefoxExtensionBridge()
+        startClipboardMonitoring()
         itemsObservation = downloads.$items.receive(on: RunLoop.main).sink { [weak self] _ in
             self?.reloadTablePreservingSelection()
         }
@@ -91,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     func applicationWillTerminate(_ notification: Notification) {
         itemsObservation?.cancel()
         browserMonitor?.stop()
+        clipboardTimer?.invalidate()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -119,7 +133,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(menuItem("New Download…", action: #selector(addDownload), keyEquivalent: "n"))
-        fileMenu.addItem(menuItem("Change Download Folder…", action: #selector(changeFolder), keyEquivalent: "d", modifiers: [.command, .option]))
+        fileMenu.addItem(menuItem("Download Video…", action: #selector(showDetectedVideos)))
+        fileMenu.addItem(menuItem("Add from Clipboard", action: #selector(addFromClipboard)))
+        fileMenu.addItem(menuItem("Batch Download…", action: #selector(batchDownload)))
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(menuItem("Delete Selected Download", action: #selector(removeSelectedFromHistory)))
+        fileMenu.addItem(menuItem("Clear Finished", action: #selector(clearFinishedDownloads)))
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(menuItem("Export URLs…", action: #selector(exportDownloads)))
+        fileMenu.addItem(menuItem("Import URLs…", action: #selector(importDownloads)))
         addTopLevelMenu(fileMenu, to: mainMenu)
 
         let downloadsMenu = NSMenu(title: "Downloads")
@@ -131,6 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         downloadsMenu.addItem(menuItem("Resume", action: #selector(resumeSelected)))
         downloadsMenu.addItem(menuItem("Cancel", action: #selector(cancelSelected)))
         downloadsMenu.addItem(menuItem("Retry", action: #selector(retrySelected)))
+        downloadsMenu.addItem(menuItem("Restart", action: #selector(restartSelected)))
+        downloadsMenu.addItem(.separator())
+        downloadsMenu.addItem(menuItem("Pause Queue", action: #selector(pauseQueue)))
+        downloadsMenu.addItem(menuItem("Start Queue", action: #selector(resumeQueue)))
         downloadsMenu.addItem(.separator())
         downloadsMenu.addItem(menuItem("Properties…", action: #selector(showSelectedProperties)))
         downloadsMenu.addItem(menuItem("Preview Video", action: #selector(previewSelectedVideo)))
@@ -142,6 +168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         viewMenu.addItem(menuItem("Active Downloads", action: #selector(showActiveDownloads), keyEquivalent: "2"))
         viewMenu.addItem(menuItem("Completed Downloads", action: #selector(showCompletedDownloads), keyEquivalent: "3"))
         addTopLevelMenu(viewMenu, to: mainMenu)
+
+        let toolsMenu = NSMenu(title: "Tools")
+        toolsMenu.addItem(menuItem("Options…", action: #selector(showSettings), keyEquivalent: ","))
+        toolsMenu.addItem(menuItem("Refresh Link", action: #selector(refreshSelectedLink)))
+        toolsMenu.addItem(menuItem("Properties", action: #selector(showSelectedProperties)))
+        toolsMenu.addItem(menuItem("Network Optimization", action: #selector(showSettings)))
+        toolsMenu.addItem(.separator())
+        toolsMenu.addItem(menuItem("Browser Monitoring…", action: #selector(showBrowserMonitoring)))
+        addTopLevelMenu(toolsMenu, to: mainMenu)
 
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(responderMenuItem("Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
@@ -196,7 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         let browserFilename = components.queryItems?.first(where: { $0.name == "filename" })?.value
             .flatMap { URL(fileURLWithPath: $0).lastPathComponent }
-        downloads.start(url: downloadURL, destinationFolder: locationStore.folderURL, preferredFileName: browserFilename)
+        downloads.start(
+            url: downloadURL,
+            destinationFolder: locationStore.folderURL,
+            preferredFileName: browserFilename,
+            startImmediately: ApplicationSettings.startDownloadsAutomatically
+        )
         reloadTablePreservingSelection()
     }
 
@@ -225,11 +265,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             url: payload.url,
             destinationFolder: locationStore.folderURL,
             preferredFileName: payload.fileName,
-            requestHeaders: payload.requestHeaders
+            requestHeaders: payload.requestHeaders,
+            startImmediately: ApplicationSettings.startDownloadsAutomatically
         )
         if let id = payload.id { removeDetectedVideo(id: id) }
         reloadTablePreservingSelection()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func startClipboardMonitoring() {
+        clipboardTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.pollClipboard() }
+        }
+    }
+
+    private func pollClipboard() {
+        guard ApplicationSettings.clipboardMonitoringEnabled else { return }
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount != lastClipboardChangeCount else { return }
+        lastClipboardChangeCount = pasteboard.changeCount
+        guard let text = pasteboard.string(forType: .string),
+              let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              !downloads.items.contains(where: { $0.sourceURL == url }) else { return }
+        downloads.start(url: url, destinationFolder: locationStore.folderURL)
     }
 
     private func offerVideoDownload(_ payload: BrowserMonitorPayload) {
@@ -251,7 +310,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         root.addArrangedSubview(heading)
 
         let topControls = NSStackView(views: [
-            button("Add download", action: #selector(addDownload))
+            button("Add URL", action: #selector(addDownload)),
+            button("Download video", action: #selector(showDetectedVideos)),
+            button("Add from clipboard", action: #selector(addFromClipboard)),
+            button("Batch download", action: #selector(batchDownload))
         ])
         topControls.spacing = 8
         root.addArrangedSubview(topControls)
@@ -269,6 +331,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         browserStatusLabel.font = .systemFont(ofSize: 12)
         browserStatusLabel.textColor = .secondaryLabelColor
         root.addArrangedSubview(browserStatusLabel)
+        browserMonitoringToggle.target = self
+        browserMonitoringToggle.action = #selector(toggleBrowserMonitoring(_:))
+        browserMonitoringToggle.state = ApplicationSettings.browserMonitoringEnabled ? .on : .off
+        root.addArrangedSubview(browserMonitoringToggle)
 
         let filters = NSStackView()
         filters.spacing = 10
@@ -347,6 +413,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func changeFolder() {
         if locationStore.chooseFolder() { refreshFolderLabel() }
+    }
+
+    @objc private func toggleBrowserMonitoring(_ sender: NSButton) {
+        ApplicationSettings.browserMonitoringEnabled = sender.state == .on
+        browserStatusLabel.stringValue = ApplicationSettings.browserMonitoringEnabled
+            ? "Browser monitoring is on. Extensions can hand downloads to XDM New."
+            : "Browser monitoring is off. Extensions will leave browser downloads untouched."
+    }
+
+    @objc private func addFromClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            presentInformation("No download link in clipboard", message: "Copy a direct HTTP or HTTPS URL, then choose Add from Clipboard.")
+            return
+        }
+        downloads.start(url: url, destinationFolder: locationStore.folderURL)
+    }
+
+    @objc private func batchDownload() {
+        let alert = NSAlert()
+        alert.messageText = "Batch download"
+        alert.informativeText = "Paste one direct HTTP or HTTPS download URL per line."
+        alert.addButton(withTitle: "Add downloads")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextView(frame: NSRect(x: 0, y: 0, width: 500, height: 160))
+        input.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        let scroll = NSScrollView(frame: input.frame)
+        scroll.documentView = input
+        scroll.hasVerticalScroller = true
+        alert.accessoryView = scroll
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let count = downloads.importURLs(from: input.string, destinationFolder: locationStore.folderURL)
+        if count == 0 { presentInformation("No valid URLs", message: "Add one direct HTTP or HTTPS URL per line.") }
+    }
+
+    @objc private func clearFinishedDownloads() {
+        downloads.clearFinished()
+        reloadTablePreservingSelection()
+    }
+
+    @objc private func exportDownloads() {
+        let panel = NSSavePanel()
+        panel.title = "Export XDM download URLs"
+        panel.nameFieldStringValue = "XDM-New-downloads.txt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try downloads.exportableURLs.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            presentInformation("Could not export downloads", message: error.localizedDescription)
+        }
+    }
+
+    @objc private func importDownloads() {
+        let panel = NSOpenPanel()
+        panel.title = "Import XDM download URLs"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let count = downloads.importURLs(from: try String(contentsOf: url), destinationFolder: locationStore.folderURL)
+            presentInformation("Import complete", message: count == 1 ? "Added 1 download." : "Added \(count) downloads.")
+        } catch {
+            presentInformation("Could not import downloads", message: error.localizedDescription)
+        }
+    }
+
+    @objc private func restartSelected() {
+        guard let item = selectedItem else { return }
+        downloads.cancel(item)
+        downloads.start(url: item.sourceURL, destinationFolder: item.destinationFolderURL, preferredFileName: item.fileName, requestHeaders: item.requestHeaders)
+    }
+
+    @objc private func pauseQueue() { downloads.pauseQueue() }
+
+    @objc private func resumeQueue() { downloads.resumeQueue() }
+
+    @objc private func refreshSelectedLink() {
+        guard let item = selectedItem else { return }
+        presentInformation("Refresh link", message: "XDM New will use the saved browser headers and the original URL when this download is restarted. For an expired signed URL, replay the download from the browser extension.")
+        _ = item
     }
 
     @objc private func showSettings() {
@@ -497,6 +646,159 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         settingsAutomaticRetryCheck?.state = ApplicationSettings.automaticRetryEnabled ? .on : .off
         settingsFolderLabel?.stringValue = locationStore.folderURL.path
         settingsLaunchAtLoginCheck?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    @objc private func showBrowserMonitoring() {
+        if let browserMonitoringWindow {
+            updateBrowserMonitoringControls()
+            browserMonitoringWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 670, height: 650),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Browser Monitoring"
+        panel.isReleasedWhenClosed = false
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 12
+        root.edgeInsets = NSEdgeInsets(top: 18, left: 22, bottom: 22, right: 22)
+
+        let heading = NSTextField(labelWithString: "Browser Monitoring")
+        heading.font = .systemFont(ofSize: 20, weight: .semibold)
+        root.addArrangedSubview(heading)
+        let status = NSTextField(wrappingLabelWithString: "\(browserStatusLabel.stringValue)\nSelect the browsers you use, install the bundled add-on, and keep it enabled. XDM New’s Firefox and Chrome bridges use native messaging and are separate from the original XDM extension.")
+        status.preferredMaxLayoutWidth = 610
+        status.font = .systemFont(ofSize: 12)
+        status.textColor = .secondaryLabelColor
+        root.addArrangedSubview(status)
+
+        let browserGrid = NSStackView()
+        browserGrid.orientation = .vertical
+        browserGrid.alignment = .leading
+        browserGrid.spacing = 7
+        [
+            ("Mozilla Firefox", #selector(showFirefoxSetup)),
+            ("Google Chrome", #selector(revealChromeExtension)),
+            ("Chromium / Vivaldi / Opera", #selector(revealChromeExtension)),
+            ("Microsoft Edge", #selector(revealChromeExtension))
+        ].forEach { title, action in
+            let row = NSStackView()
+            row.spacing = 12
+            let label = NSTextField(labelWithString: title)
+            label.frame.size.width = 220
+            row.addArrangedSubview(label)
+            row.addArrangedSubview(button(title == "Mozilla Firefox" ? "Install add-on…" : "Show add-on…", action: action))
+            browserGrid.addArrangedSubview(row)
+        }
+        root.addArrangedSubview(browserGrid)
+        root.addArrangedSubview(button("Install / repair native browser bridge", action: #selector(installFirefoxBridge)))
+
+        let capture = NSButton(checkboxWithTitle: "Show a download option for streaming video", target: nil, action: nil)
+        root.addArrangedSubview(capture)
+        browserVideoCaptureCheck = capture
+        let videoTypes = settingField(title: "Video formats to detect", width: 570)
+        root.addArrangedSubview(videoTypes.row)
+        browserVideoExtensionsField = videoTypes.field
+        let fileTypes = settingField(title: "File types to capture automatically", width: 570)
+        root.addArrangedSubview(fileTypes.row)
+        browserFileExtensionsField = fileTypes.field
+
+        let sizeRow = NSStackView()
+        sizeRow.spacing = 12
+        sizeRow.addArrangedSubview(NSTextField(labelWithString: "Download video larger than"))
+        let sizeControl = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 100, height: 26), pullsDown: false)
+        sizeControl.addItems(withTitles: ["1 MB", "5 MB", "10 MB", "25 MB", "50 MB", "100 MB"])
+        sizeRow.addArrangedSubview(sizeControl)
+        root.addArrangedSubview(sizeRow)
+        browserMinimumSizeControl = sizeControl
+
+        let excluded = settingField(title: "Do not automatically capture downloads from these sites", width: 570)
+        root.addArrangedSubview(excluded.row)
+        browserExcludedHostsField = excluded.field
+        let clipboard = NSButton(checkboxWithTitle: "Monitor clipboard for direct download links", target: nil, action: nil)
+        let automaticStart = NSButton(checkboxWithTitle: "Start downloads automatically", target: nil, action: nil)
+        let timestamp = NSButton(checkboxWithTitle: "Use server timestamp when supplied", target: nil, action: nil)
+        root.addArrangedSubview(clipboard)
+        root.addArrangedSubview(automaticStart)
+        root.addArrangedSubview(timestamp)
+        browserClipboardCheck = clipboard
+        browserAutomaticStartCheck = automaticStart
+        browserTimestampCheck = timestamp
+
+        let actions = NSStackView()
+        actions.spacing = 8
+        actions.addArrangedSubview(button("Save", action: #selector(saveBrowserMonitoring)))
+        actions.addArrangedSubview(button("Close", action: #selector(closeBrowserMonitoring)))
+        root.addArrangedSubview(actions)
+        scroll.documentView = root
+        panel.contentView = scroll
+        browserMonitoringWindow = panel
+        updateBrowserMonitoringControls()
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func settingField(title: String, width: CGFloat) -> (row: NSStackView, field: NSTextField) {
+        let row = NSStackView()
+        row.orientation = .vertical
+        row.alignment = .leading
+        row.spacing = 4
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        let field = NSTextField(string: "")
+        field.frame.size.width = width
+        row.addArrangedSubview(label)
+        row.addArrangedSubview(field)
+        return (row, field)
+    }
+
+    private func updateBrowserMonitoringControls() {
+        browserVideoCaptureCheck?.state = ApplicationSettings.videoCaptureEnabled ? .on : .off
+        browserFileExtensionsField?.stringValue = ApplicationSettings.fileExtensions
+        browserVideoExtensionsField?.stringValue = ApplicationSettings.videoExtensions
+        browserExcludedHostsField?.stringValue = ApplicationSettings.excludedHosts
+        browserClipboardCheck?.state = ApplicationSettings.clipboardMonitoringEnabled ? .on : .off
+        browserAutomaticStartCheck?.state = ApplicationSettings.startDownloadsAutomatically ? .on : .off
+        browserTimestampCheck?.state = ApplicationSettings.serverTimestampEnabled ? .on : .off
+        let values = [1, 5, 10, 25, 50, 100]
+        browserMinimumSizeControl?.selectItem(at: values.firstIndex(of: ApplicationSettings.videoMinimumMegabytes) ?? 0)
+    }
+
+    @objc private func saveBrowserMonitoring() {
+        ApplicationSettings.videoCaptureEnabled = browserVideoCaptureCheck?.state == .on
+        ApplicationSettings.fileExtensions = browserFileExtensionsField?.stringValue ?? ApplicationSettings.fileExtensions
+        ApplicationSettings.videoExtensions = browserVideoExtensionsField?.stringValue ?? ApplicationSettings.videoExtensions
+        ApplicationSettings.excludedHosts = browserExcludedHostsField?.stringValue ?? ApplicationSettings.excludedHosts
+        ApplicationSettings.clipboardMonitoringEnabled = browserClipboardCheck?.state == .on
+        ApplicationSettings.startDownloadsAutomatically = browserAutomaticStartCheck?.state == .on
+        ApplicationSettings.serverTimestampEnabled = browserTimestampCheck?.state == .on
+        let values = [1, 5, 10, 25, 50, 100]
+        if let index = browserMinimumSizeControl?.indexOfSelectedItem, values.indices.contains(index) {
+            ApplicationSettings.videoMinimumMegabytes = values[index]
+        }
+        presentInformation("Browser Monitoring saved", message: "Reload your browser extension so it receives the updated capture rules.")
+    }
+
+    @objc private func closeBrowserMonitoring() {
+        browserMonitoringWindow?.orderOut(nil)
+        browserMonitoringWindow = nil
+        browserFileExtensionsField = nil
+        browserVideoExtensionsField = nil
+        browserExcludedHostsField = nil
+        browserMinimumSizeControl = nil
+        browserVideoCaptureCheck = nil
+        browserClipboardCheck = nil
+        browserAutomaticStartCheck = nil
+        browserTimestampCheck = nil
     }
 
     @objc private func changeConnectionsSetting(_ sender: NSSlider) {

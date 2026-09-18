@@ -45,6 +45,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private var activeItemIDs = Set<UUID>()
     private var automaticRetryCounts: [UUID: Int] = [:]
     private var automaticRetryPendingIDs = Set<UUID>()
+    private var queueIsPaused = false
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -57,19 +58,21 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         url: URL,
         destinationFolder: URL,
         preferredFileName: String? = nil,
-        requestHeaders: [String: String] = [:]
+        requestHeaders: [String: String] = [:],
+        startImmediately: Bool = true
     ) {
-        let item = DownloadItem(
+        var item = DownloadItem(
             id: UUID(),
             sourceURL: url,
             destinationFolderURL: destinationFolder,
             requestHeaders: requestHeaders,
             fileName: preferredFileName ?? (url.lastPathComponent.isEmpty ? "Download" : url.lastPathComponent)
         )
+        if !startImmediately { item.state = .paused }
         items.insert(item, at: 0)
         automaticRetryCounts[item.id] = 0
         configure(item)
-        enqueue(item.id)
+        if startImmediately { enqueue(item.id) }
     }
 
     func pause(_ item: DownloadItem) {
@@ -166,6 +169,34 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         scheduleQueuedTransfers()
     }
 
+    func pauseQueue() {
+        queueIsPaused = true
+        let active = items.filter { [.queued, .downloading].contains($0.state) }
+        active.forEach { pause($0) }
+    }
+
+    func resumeQueue() {
+        queueIsPaused = false
+        items.filter { $0.state == .paused }.forEach { resume($0) }
+        scheduleQueuedTransfers()
+    }
+
+    func clearFinished() {
+        let completed = items.filter { $0.state == .completed }
+        completed.forEach { remove($0) }
+    }
+
+    func importURLs(from text: String, destinationFolder: URL) -> Int {
+        let urls = text.split(whereSeparator: \.isNewline).compactMap { URL(string: String($0).trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { ["http", "https"].contains($0.scheme?.lowercased() ?? "") }
+        urls.forEach { start(url: $0, destinationFolder: destinationFolder) }
+        return urls.count
+    }
+
+    var exportableURLs: String {
+        items.map { $0.sourceURL.absoluteString }.joined(separator: "\n")
+    }
+
     func cleanUnusedCache(in destinationFolder: URL) -> Int {
         let cacheRoot = destinationFolder.appendingPathComponent(".XDM", isDirectory: true)
         let activeWorkspaces = Set(segmentedTransfers.values.map(\.workspaceURL))
@@ -199,6 +230,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     }
 
     private func scheduleQueuedTransfers() {
+        guard !queueIsPaused else { return }
         while activeItemIDs.count < ApplicationSettings.simultaneousDownloads, !queuedItemIDs.isEmpty {
             let itemID = queuedItemIDs.removeFirst()
             guard let item = items.first(where: { $0.id == itemID }), destinationFolders[itemID] != nil else { continue }

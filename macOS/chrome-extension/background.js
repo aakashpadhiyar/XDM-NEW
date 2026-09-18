@@ -25,12 +25,12 @@ chrome.action.onClicked.addListener(async () => {
 chrome.downloads.onCreated.addListener(async (download) => {
   if (!monitoringEnabled || !download.url || !/^https?:/i.test(download.url)) return;
   try {
-    const body = `url=${download.finalUrl || download.url}\nfile=${download.filename || ""}\n`;
-    const response = await fetch("http://127.0.0.1:9614/download", {
-      method: "POST",
-      body
-    });
-    if (!response.ok) return;
+    // A URL-scheme handoff avoids the contested legacy XDM port (9614).
+    // macOS routes this directly to the installed XDM New.app.
+    const handoff = new URL("xdmtest://download");
+    handoff.searchParams.set("url", download.finalUrl || download.url);
+    if (download.filename) handoff.searchParams.set("filename", download.filename);
+    await chrome.tabs.create({ url: handoff.toString(), active: false });
     await chrome.downloads.cancel(download.id);
     await chrome.downloads.erase({ id: download.id });
   } catch (error) {

@@ -43,6 +43,8 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private var fallingBackIDs = Set<UUID>()
     private var queuedItemIDs = [UUID]()
     private var activeItemIDs = Set<UUID>()
+    private var automaticRetryCounts: [UUID: Int] = [:]
+    private var automaticRetryPendingIDs = Set<UUID>()
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -65,6 +67,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             fileName: preferredFileName ?? (url.lastPathComponent.isEmpty ? "Download" : url.lastPathComponent)
         )
         items.insert(item, at: 0)
+        automaticRetryCounts[item.id] = 0
         configure(item)
         enqueue(item.id)
     }
@@ -133,6 +136,8 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         destinationFolders[item.id] = nil
         preferredFileNames[item.id] = nil
         requestHeadersByID[item.id] = nil
+        automaticRetryPendingIDs.remove(item.id)
+        automaticRetryCounts[item.id] = nil
         resumeRequestedWhilePausing.remove(item.id)
         singlePauseDataReadyIDs.remove(item.id)
         singlePauseCompletionPendingIDs.remove(item.id)
@@ -151,6 +156,8 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         resumeDataByID[item.id] = nil
         pausedSegmentedIDs.remove(item.id)
         fallingBackIDs.remove(item.id)
+        automaticRetryPendingIDs.remove(item.id)
+        automaticRetryCounts[item.id] = 0
         configure(item)
         enqueue(item.id)
     }
@@ -212,6 +219,27 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private func releaseSlot(for itemID: UUID) {
         activeItemIDs.remove(itemID)
         scheduleQueuedTransfers()
+    }
+
+    private func scheduleAutomaticRetry(for itemID: UUID, error: Error) -> Bool {
+        guard ApplicationSettings.automaticRetryEnabled,
+              destinationFolders[itemID] != nil,
+              !automaticRetryPendingIDs.contains(itemID) else { return false }
+        let attempt = automaticRetryCounts[itemID, default: 0] + 1
+        guard attempt <= ApplicationSettings.automaticRetryLimit else { return false }
+
+        automaticRetryCounts[itemID] = attempt
+        automaticRetryPendingIDs.insert(itemID)
+        update(itemID) {
+            $0.state = .queued
+            $0.errorMessage = "Retrying automatically (\(attempt)/\(ApplicationSettings.automaticRetryLimit)): \(error.localizedDescription)"
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(attempt)) { [weak self] in
+            guard let self, self.automaticRetryPendingIDs.remove(itemID) != nil,
+                  self.destinationFolders[itemID] != nil else { return }
+            self.enqueue(itemID)
+        }
+        return true
     }
 
     private func recordSinglePauseData(_ itemID: UUID, resumeData: Data?) {
@@ -620,6 +648,7 @@ extension DownloadCoordinator: URLSessionDownloadDelegate {
             }
             releaseSlot(for: itemID)
             guard let error else { return }
+            if scheduleAutomaticRetry(for: itemID, error: error) { return }
             update(itemID) {
                 guard $0.state != .completed else { return }
                 $0.state = .failed

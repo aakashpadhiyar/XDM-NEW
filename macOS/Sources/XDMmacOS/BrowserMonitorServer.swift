@@ -59,9 +59,14 @@ final class BrowserMonitorServer: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .ready:
-                self.notifyAvailability("Original XDM Firefox extension: connected")
+                self.notifyAvailability("Legacy XDM browser monitor: listening on 127.0.0.1:9614")
             case .failed(let error):
-                self.notifyAvailability("Original extension unavailable: \(error.localizedDescription)")
+                let description = error.localizedDescription
+                if description.localizedCaseInsensitiveContains("Address already in use") {
+                    self.notifyAvailability("Legacy XDM extension unavailable: port 9614 is used by another XDM app. Quit the old XDM app, or use the bundled XDM New extension.")
+                } else {
+                    self.notifyAvailability("Legacy XDM extension unavailable: \(description)")
+                }
             case .cancelled:
                 self.notifyAvailability("Original extension monitoring stopped")
             default:

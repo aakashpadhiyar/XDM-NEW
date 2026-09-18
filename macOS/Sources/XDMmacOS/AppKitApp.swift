@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let searchField = NSSearchField()
     private let categoryMenu = NSPopUpButton()
     private let stateControl = NSSegmentedControl(labels: ["All", "Active", "Completed"], trackingMode: .selectOne, target: nil, action: nil)
-    private let browserStatusLabel = NSTextField(labelWithString: "Original Firefox extension: starting…")
+    private let browserStatusLabel = NSTextField(labelWithString: "Browser integration: starting…")
     private let detectedVideosButton = NSButton(title: "Download video", target: nil, action: nil)
     private var detectedVideosMenuItem: NSMenuItem?
     private var stateFilter = StateFilter.all
@@ -56,10 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var settingsLaunchAtLoginCheck: NSButton?
     private var settingsFolderLabel: NSTextField?
     private var settingsAppearanceControl: NSPopUpButton?
+    private var settingsAutomaticRetryCheck: NSButton?
     private weak var mainWindow: NSWindow?
     private var propertiesWindow: NSPanel?
     private var propertiesItemID: UUID?
     private var aboutWindow: NSPanel?
+    private var videoListWindow: NSPanel?
+    private let detectedVideosTable = NSTableView()
+    private var visibleVideoOptions = [BrowserMonitorPayload]()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         applyAppearanceSetting()
@@ -212,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             browserMonitor = server
             server.start()
         } catch {
-            browserStatusLabel.stringValue = "Original extension unavailable: \(error.localizedDescription)"
+            browserStatusLabel.stringValue = "Legacy XDM extension unavailable: \(error.localizedDescription)"
         }
     }
 
@@ -247,8 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         root.addArrangedSubview(heading)
 
         let topControls = NSStackView(views: [
-            button("Add download", action: #selector(addDownload)),
-            button("Change folder", action: #selector(changeFolder))
+            button("Add download", action: #selector(addDownload))
         ])
         topControls.spacing = 8
         root.addArrangedSubview(topControls)
@@ -257,6 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         detectedVideosButton.bezelStyle = .rounded
         updateDetectedVideosButton()
 
+        folderLabel.stringValue = "Download location and category folders are managed in Settings."
         folderLabel.font = .systemFont(ofSize: 12)
         folderLabel.textColor = .secondaryLabelColor
         folderLabel.lineBreakMode = .byTruncatingMiddle
@@ -272,16 +276,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         stateControl.action = #selector(changeStateFilter(_:))
         stateControl.selectedSegment = StateFilter.all.rawValue
         filters.addArrangedSubview(stateControl)
-        categoryMenu.addItems(withTitles: ["All categories", "Documents", "Compressed", "Music", "Video", "Programs", "Other"])
-        categoryMenu.target = self
-        categoryMenu.action = #selector(refreshList)
-        filters.addArrangedSubview(categoryMenu)
         searchField.placeholderString = "Search downloads"
         searchField.target = self
         searchField.action = #selector(refreshList)
         searchField.frame.size.width = 230
         filters.addArrangedSubview(searchField)
         root.addArrangedSubview(filters)
+
+        let developer = NSTextField(labelWithString: "Developed by Aakash Padhiyar  •  github.com/aakashpadhiyar/XDM-NEW")
+        developer.font = .systemFont(ofSize: 11)
+        developer.textColor = .secondaryLabelColor
+        root.addArrangedSubview(developer)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("download"))
         column.title = "Downloads"
@@ -353,7 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 650),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -405,6 +410,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         root.addArrangedSubview(simultaneousRow)
         settingsSimultaneousControl = simultaneousControl
 
+        let automaticRetry = NSButton(
+            checkboxWithTitle: "Retry network failures automatically (up to \(ApplicationSettings.automaticRetryLimit) times)",
+            target: nil,
+            action: nil
+        )
+        root.addArrangedSubview(automaticRetry)
+        settingsAutomaticRetryCheck = automaticRetry
+
         let appearanceRow = NSStackView()
         appearanceRow.spacing = 12
         let appearanceTitle = NSTextField(labelWithString: "Appearance")
@@ -430,6 +443,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         root.addArrangedSubview(folderRow)
         settingsFolderLabel = settingsFolder
 
+        let categoryHeading = NSTextField(labelWithString: "Categories")
+        categoryHeading.font = .systemFont(ofSize: 14, weight: .semibold)
+        root.addArrangedSubview(categoryHeading)
+        let categoryHelp = NSTextField(wrappingLabelWithString: "Documents, compressed files, music, video, and programs are shown as categories in the download table. New downloads use the location above so all .XDM resume data stays together.")
+        categoryHelp.font = .systemFont(ofSize: 12)
+        categoryHelp.textColor = .secondaryLabelColor
+        categoryHelp.preferredMaxLayoutWidth = 470
+        root.addArrangedSubview(categoryHelp)
+
         let launchAtLogin = NSButton(checkboxWithTitle: "Open XDM Test when I log in", target: nil, action: nil)
         root.addArrangedSubview(launchAtLogin)
         settingsLaunchAtLoginCheck = launchAtLogin
@@ -437,16 +459,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let browserHeading = NSTextField(labelWithString: "Browser integration")
         browserHeading.font = .systemFont(ofSize: 14, weight: .semibold)
         root.addArrangedSubview(browserHeading)
-        let browserStatus = NSTextField(wrappingLabelWithString: "Firefox browser monitoring: \(browserStatusLabel.stringValue). Install an extension to send downloads and detected videos to XDM.")
+        let browserStatus = NSTextField(wrappingLabelWithString: "\(browserStatusLabel.stringValue)\n\nUse XDM New’s bundled browser extensions. Firefox uses native messaging; Chrome uses the installed XDM New app directly, so neither needs the legacy port.")
         browserStatus.font = .systemFont(ofSize: 12)
         browserStatus.textColor = .secondaryLabelColor
         browserStatus.preferredMaxLayoutWidth = 480
         root.addArrangedSubview(browserStatus)
         let browserActions = NSStackView()
         browserActions.spacing = 8
-        browserActions.addArrangedSubview(button("Firefox setup…", action: #selector(showFirefoxSetup)))
-        browserActions.addArrangedSubview(button("Show Chrome extension", action: #selector(revealChromeExtension)))
+        browserActions.addArrangedSubview(button("Install / repair Firefox bridge", action: #selector(installFirefoxBridge)))
+        browserActions.addArrangedSubview(button("Firefox extension…", action: #selector(showFirefoxSetup)))
+        browserActions.addArrangedSubview(button("Chrome extension…", action: #selector(revealChromeExtension)))
         root.addArrangedSubview(browserActions)
+
+        let project = NSButton(title: "Developer: Aakash Padhiyar  •  Open GitHub repository", target: self, action: #selector(openProjectRepository))
+        project.bezelStyle = .inline
+        root.addArrangedSubview(project)
 
         let actions = NSStackView()
         actions.spacing = 8
@@ -467,6 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         settingsConnectionsLabel?.stringValue = "\(ApplicationSettings.connectionsPerFile) / \(ApplicationSettings.maximumConnectionsPerFile)"
         settingsSimultaneousControl?.selectItem(at: ApplicationSettings.simultaneousDownloads - 1)
         settingsAppearanceControl?.selectItem(at: ApplicationSettings.AppearanceMode.allCases.firstIndex(of: ApplicationSettings.appearanceMode) ?? 0)
+        settingsAutomaticRetryCheck?.state = ApplicationSettings.automaticRetryEnabled ? .on : .off
         settingsFolderLabel?.stringValue = locationStore.folderURL.path
         settingsLaunchAtLoginCheck?.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
@@ -504,6 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             ApplicationSettings.appearanceMode = ApplicationSettings.AppearanceMode.allCases[appearanceIndex]
             applyAppearanceSetting()
         }
+        ApplicationSettings.automaticRetryEnabled = settingsAutomaticRetryCheck?.state == .on
         downloads.applyQueueSettings()
 
         guard let launchAtLogin = settingsLaunchAtLoginCheck else {
@@ -541,6 +570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         settingsLaunchAtLoginCheck = nil
         settingsFolderLabel = nil
         settingsAppearanceControl = nil
+        settingsAutomaticRetryCheck = nil
     }
 
     private func applyAppearanceSetting() {
@@ -553,8 +583,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func showFirefoxSetup() {
         let alert = NSAlert()
-        alert.messageText = "Firefox browser monitoring"
-        alert.informativeText = "Use the original installed XDM Browser Monitor extension, or load the bundled Firefox development extension. Only one XDM app can use the original extension at a time: quit the old /Applications/xdm.app first. The bundled extension is loaded manually through Firefox’s about:debugging page."
+        alert.messageText = "Firefox browser integration"
+        alert.informativeText = "First choose Install / repair Firefox bridge in Settings. Then open about:debugging in Firefox → This Firefox → Load Temporary Add-on, and select manifest.json from the bundled folder. The original legacy XDM extension can only connect when port 9614 is free; the bundled XDM New extension does not have that limitation."
         alert.addButton(withTitle: "Show Firefox extension")
         alert.addButton(withTitle: "Close")
         if alert.runModal() == .alertFirstButtonReturn { revealFirefoxExtension() }
@@ -566,6 +596,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func revealChromeExtension() {
         revealBundledResource(named: "chrome-extension", message: "In Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked, then select this folder.")
+    }
+
+    @objc private func installFirefoxBridge() {
+        guard let hostURL = Bundle.main.resourceURL?.appendingPathComponent("XDMNativeHost"),
+              FileManager.default.isExecutableFile(atPath: hostURL.path) else {
+            presentInformation("Firefox bridge is unavailable", message: "Reinstall XDM New so its native host is included.")
+            return
+        }
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Mozilla/NativeMessagingHosts", isDirectory: true)
+        let manifestURL = directory.appendingPathComponent("org.xdm.test.json")
+        let manifest: [String: Any] = [
+            "name": "org.xdm.test",
+            "description": "XDM New native messaging host",
+            "path": hostURL.path,
+            "type": "stdio",
+            "allowed_extensions": ["xdm-test@local"]
+        ]
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: manifestURL, options: .atomic)
+            presentInformation("Firefox bridge installed", message: "Firefox can now send downloads to XDM New. Load the bundled extension from Settings → Firefox extension.")
+        } catch {
+            presentInformation("Could not install Firefox bridge", message: error.localizedDescription)
+        }
+    }
+
+    @objc private func openProjectRepository() {
+        NSWorkspace.shared.open(URL(string: "https://github.com/aakashpadhiyar/XDM-NEW")!)
     }
 
     private func revealBundledResource(named name: String, message: String) {
@@ -924,6 +984,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         detectedVideos.removeAll { $0.id == id }
         browserMonitor?.removeVideo(id: id)
         updateDetectedVideosButton()
+        if videoListWindow?.isVisible == true {
+            visibleVideoOptions = orderedVideoOptions
+            detectedVideosTable.reloadData()
+        }
         if detectedVideos.isEmpty { videoToast?.orderOut(nil) }
     }
 
@@ -1043,31 +1107,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func showDetectedVideos() {
         guard !detectedVideos.isEmpty else { return }
         videoToast?.orderOut(nil)
-        let alert = NSAlert()
-        alert.messageText = "Detected videos"
-        alert.informativeText = "Choose a detected media stream to download. The list shows the file name, reported size, and media type."
-        alert.addButton(withTitle: "Download selected")
-        alert.addButton(withTitle: "Later")
-        alert.addButton(withTitle: "View details")
-        let choices = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 460, height: 26), pullsDown: false)
-        let options = orderedVideoOptions
-        for payload in options {
-            let name = videoName(payload)
-            choices.addItem(withTitle: "\(name) — \(videoDescription(payload))")
+        visibleVideoOptions = orderedVideoOptions
+        if videoListWindow == nil { makeDetectedVideosPanel() }
+        detectedVideosTable.reloadData()
+        let bestIndex = visibleVideoOptions.firstIndex(where: { isBestVariant($0) }) ?? 0
+        detectedVideosTable.selectRowIndexes(IndexSet(integer: bestIndex), byExtendingSelection: false)
+        positionVideoListPanel()
+        videoListWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func makeDetectedVideosPanel() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 300),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Download video"
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.level = .floating
+
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 10
+        root.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
+        let heading = NSTextField(labelWithString: "Detected video downloads")
+        heading.font = .systemFont(ofSize: 16, weight: .semibold)
+        root.addArrangedSubview(heading)
+        let hint = NSTextField(labelWithString: "Unique variants only. “Best” is the largest reported version of the same media.")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        root.addArrangedSubview(hint)
+
+        let columns = [("Name", 330.0), ("Size", 90.0), ("Type", 150.0)]
+        for (identifier, width) in columns {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("video-\(identifier)"))
+            column.title = identifier
+            column.width = width
+            detectedVideosTable.addTableColumn(column)
         }
-        if let bestIndex = options.firstIndex(where: { isBestVariant($0) }) {
-            choices.selectItem(at: bestIndex)
-        }
-        alert.accessoryView = choices
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            let payload = options[choices.indexOfSelectedItem]
-            startBrowserDownload(payload)
-        case .alertThirdButtonReturn:
-            showMediaDetails(options[choices.indexOfSelectedItem])
-        default:
-            break
-        }
+        detectedVideosTable.delegate = self
+        detectedVideosTable.dataSource = self
+        detectedVideosTable.usesAlternatingRowBackgroundColors = true
+        detectedVideosTable.rowHeight = 30
+        let scroll = NSScrollView()
+        scroll.documentView = detectedVideosTable
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        root.addArrangedSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.widthAnchor.constraint(equalToConstant: 586),
+            scroll.heightAnchor.constraint(equalToConstant: 150)
+        ])
+        let actions = NSStackView()
+        actions.spacing = 8
+        actions.addArrangedSubview(button("Details", action: #selector(showSelectedVideoDetails)))
+        actions.addArrangedSubview(button("Download now", action: #selector(downloadSelectedVideo)))
+        actions.addArrangedSubview(button("Close", action: #selector(closeDetectedVideos)))
+        root.addArrangedSubview(actions)
+        panel.contentView = root
+        videoListWindow = panel
+    }
+
+    private func positionVideoListPanel() {
+        guard let panel = videoListWindow, let screen = mainWindow?.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(x: visible.maxX - panel.frame.width - 18, y: visible.minY + 18))
+    }
+
+    @objc private func downloadSelectedVideo() {
+        let row = detectedVideosTable.selectedRow
+        guard visibleVideoOptions.indices.contains(row) else { return }
+        startBrowserDownload(visibleVideoOptions[row])
+        visibleVideoOptions = orderedVideoOptions
+        detectedVideosTable.reloadData()
+        if visibleVideoOptions.isEmpty { closeDetectedVideos() }
+    }
+
+    @objc private func showSelectedVideoDetails() {
+        let row = detectedVideosTable.selectedRow
+        guard visibleVideoOptions.indices.contains(row) else { return }
+        showMediaDetails(visibleVideoOptions[row])
+    }
+
+    @objc private func closeDetectedVideos() {
+        videoListWindow?.orderOut(nil)
     }
 
     private func showMediaDetails(_ payload: BrowserMonitorPayload) {
@@ -1130,10 +1258,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        visibleItems.count
+        if tableView == detectedVideosTable { return visibleVideoOptions.count }
+        return visibleItems.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView == detectedVideosTable {
+            guard visibleVideoOptions.indices.contains(row), let identifier = tableColumn?.identifier.rawValue else { return nil }
+            let payload = visibleVideoOptions[row]
+            let reuseID = NSUserInterfaceItemIdentifier("video-cell-\(identifier)")
+            let cell = tableView.makeView(withIdentifier: reuseID, owner: self) as? NSTableCellView ?? {
+                let newCell = NSTableCellView()
+                newCell.identifier = reuseID
+                let label = NSTextField(labelWithString: "")
+                label.lineBreakMode = .byTruncatingMiddle
+                label.translatesAutoresizingMaskIntoConstraints = false
+                newCell.addSubview(label)
+                NSLayoutConstraint.activate([
+                    label.leadingAnchor.constraint(equalTo: newCell.leadingAnchor, constant: 6),
+                    label.trailingAnchor.constraint(equalTo: newCell.trailingAnchor, constant: -6),
+                    label.centerYAnchor.constraint(equalTo: newCell.centerYAnchor)
+                ])
+                return newCell
+            }()
+            let label = cell.subviews.compactMap { $0 as? NSTextField }.first
+            switch identifier {
+            case "video-Name": label?.stringValue = "\(isBestVariant(payload) ? "Best · " : "")\(videoName(payload))"
+            case "video-Size": label?.stringValue = payload.reportedSize.map(DownloadItem.byteCount) ?? "Unknown"
+            default: label?.stringValue = payload.mediaKind
+            }
+            return cell
+        }
         guard visibleItems.indices.contains(row) else { return nil }
         let item = visibleItems[row]
         let identifier = NSUserInterfaceItemIdentifier("downloadCell")
@@ -1164,7 +1319,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             case .active: stateMatches = [.queued, .downloading, .merging, .paused].contains(item.state)
             case .completed: stateMatches = item.state == .completed
             }
-            let categoryMatches = categoryMenu.titleOfSelectedItem == "All categories" || category(for: item) == categoryMenu.titleOfSelectedItem
+            let selectedCategory = categoryMenu.titleOfSelectedItem
+            let categoryMatches = selectedCategory == nil || selectedCategory == "All categories" || category(for: item) == selectedCategory
             let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let searchMatches = query.isEmpty || item.fileName.localizedCaseInsensitiveContains(query) || item.sourceURL.absoluteString.localizedCaseInsensitiveContains(query)
             return stateMatches && categoryMatches && searchMatches

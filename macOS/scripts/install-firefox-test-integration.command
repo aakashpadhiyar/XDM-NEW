@@ -3,13 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
-APP_DIR="${1:-$PROJECT_DIR/dist/XDM Test.app}"
+APP_DIR="${1:-$PROJECT_DIR/dist/XDM New.app}"
 HOST_EXECUTABLE="$APP_DIR/Contents/Resources/XDMNativeHost"
 MANIFEST_DIR="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
 MANIFEST_PATH="$MANIFEST_DIR/org.xdm.test.json"
 
 if [[ ! -x "$HOST_EXECUTABLE" ]]; then
-  echo "Build the test app first: $PROJECT_DIR/scripts/package-test-app.sh"
+  echo "Build the test app first: $PROJECT_DIR/scripts/build-macos.command"
   exit 66
 fi
 if [[ -e "$MANIFEST_PATH" ]]; then

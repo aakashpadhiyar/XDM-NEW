@@ -18,10 +18,11 @@ Current first slice:
 
 ```sh
 cd macOS
-swift build -c release
-./scripts/package-test-app.sh
-open "dist/XDM Test.app"
+./scripts/build-macos.command
+open "dist/XDM New.app"
 ```
+
+The command compiles the release build, makes a clean ad-hoc-signed staging app, verifies its signature, creates and validates `dist/XDM-New-macOS-<version>-test.zip`, and prints its SHA-256 checksum. Only after those checks succeed, it replaces the known generated test apps, test ZIPs, and `.DS_Store` in `macOS/dist`; source files, the GitHub release, and your Downloads folder are never touched. Pass `--keep-old` to preserve earlier local test artifacts.
 
 To copy the test app to an empty folder without administrator access:
 

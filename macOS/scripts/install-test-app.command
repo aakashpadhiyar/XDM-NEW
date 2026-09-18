@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
-APP_DIR="${PROJECT_DIR}/dist/XDM Test.app"
+APP_DIR="${PROJECT_DIR}/dist/XDM New.app"
 TARGET_DIR="${1:-}"
 
 if [[ -z "$TARGET_DIR" ]]; then
@@ -12,18 +12,18 @@ if [[ -z "$TARGET_DIR" ]]; then
   exit 64
 fi
 
-"$SCRIPT_DIR/package-test-app.sh"
+"$SCRIPT_DIR/build-macos.command"
 mkdir -p "$TARGET_DIR"
 
-if [[ -e "$TARGET_DIR/XDM Test.app" ]]; then
-  echo "Refusing to overwrite existing test app: $TARGET_DIR/XDM Test.app"
+if [[ -e "$TARGET_DIR/XDM New.app" ]]; then
+  echo "Refusing to overwrite existing test app: $TARGET_DIR/XDM New.app"
   echo "Choose an empty folder or move the previous test app first."
   exit 65
 fi
 
-ditto "$APP_DIR" "$TARGET_DIR/XDM Test.app"
-xattr -cr "$TARGET_DIR/XDM Test.app"
-codesign --force --deep --sign - "$TARGET_DIR/XDM Test.app"
-codesign --verify --deep "$TARGET_DIR/XDM Test.app"
-open "$TARGET_DIR/XDM Test.app"
-echo "Installed test app: $TARGET_DIR/XDM Test.app"
+ditto "$APP_DIR" "$TARGET_DIR/XDM New.app"
+xattr -cr "$TARGET_DIR/XDM New.app"
+codesign --force --deep --sign - "$TARGET_DIR/XDM New.app"
+codesign --verify --deep "$TARGET_DIR/XDM New.app"
+open "$TARGET_DIR/XDM New.app"
+echo "Installed test app: $TARGET_DIR/XDM New.app"
